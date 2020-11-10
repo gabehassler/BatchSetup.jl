@@ -1,0 +1,4 @@
+name = "BatchSetup"
+uuid = "86d4471f-30a2-4aa5-9c08-322c09151c21"
+authors = ["Gabe Hassler <gabriel.w.hassler@gmail.com>"]
+version = "0.1.0"
