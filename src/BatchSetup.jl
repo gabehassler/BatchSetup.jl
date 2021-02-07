@@ -1,9 +1,12 @@
 module BatchSetup
 
-export setup_batch, setup_sh, BatchInfo
+export setup_batch, setup_sh, BatchInfo, SubmissionArguments
 
 
 const SOURCEDIR = "\$HOME/Working-Repo/xml"
+const DEFAULT_DATA = "8G"
+const DEFAULT_TIME = "300:00:00"
+const EMAIL = "gabriel.w.hassler@gmail.com"
 
 mutable struct BatchInfo
     name::String
@@ -21,9 +24,59 @@ mutable struct BatchInfo
     load_files::Vector{String}
     email::Bool
     tmp_dir::Bool
-    sub_dir::String
     source_dir::String
 end
+
+mutable struct SubmissionArguments
+    h_data::String
+    h_rt::String
+    email::Bool
+end
+
+mutable struct BatchSubmission
+    args::SubmissionArguments
+    modules::Vector{String}
+    code::String
+end
+
+function SubmissionArguments()
+    return SubmissionArguments(DEFAULT_DATA, DEFAULT_TIME, true)
+end
+
+function preamble(sa::SubmissionArguments)
+    args = ["cwd" => "",
+            "o" => "joblog.out",
+            "j" => "y",
+            "l" => "h_rt=$(sa.h_rt),h_data=$(sa.h_data),highp"]
+
+    if sa.email
+        email_args = ["M" => EMAIL, "m" => "bea"]
+        args = [args; email_args]
+    end
+
+    hash_bang = "!#/bin/bash"
+    lines = ["#\$ -$(p[1]) $(p[2])" for p in args]
+
+    return hash_bang * join(lines, "\n")
+end
+
+function make_batch(bs::BatchSubmission)
+
+    batch = preamble(bs.args)
+    batch = batch * "\n\n. /u/local/Modules/default/init/modules.sh\n"
+
+    for mod in bs.modules
+        batch *= "module load $mod\n"
+    end
+    batch *= "\n\n$(bs.code)"
+
+    return batch
+end
+
+function save_batch(path::String, bs::BatchSubmission)
+    save(path, make_batch)
+end
+
 
 function BatchInfo(filenames::Vector{String})
     return BatchInfo(filenames[1],
@@ -41,7 +94,6 @@ function BatchInfo(filenames::Vector{String})
                     [""],
                     true,
                     false,
-                    "",
                     ".")
 end
 
@@ -200,6 +252,11 @@ function setup_sh(dir::String, filenames::Array{Array{String, N}, M},
     qsubs = join(qsubs, "\n")
     write(joinpath(dir, "submit.sh"), qsubs)
 end
+
+# function submit_batch(path::String, bi::BatchInfo)
+#     setup_batch(path, bi)
+#     run(`qsub $path`)
+# end
 
 
 
