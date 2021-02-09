@@ -35,17 +35,6 @@ mutable struct SubmissionArguments
     email::Bool
 end
 
-mutable struct BatchSubmission
-    id::String
-    args::SubmissionArguments
-    # modules::Vector{String}
-    instructions::Vector{XMLInfo}
-end
-
-function BatchSubmission(id::String, args::SubmissionArguments, instructions::XMLInfo)
-    return BatchSubmission(id, args, [instructions])
-end
-
 function SubmissionArguments()
     return SubmissionArguments(DEFAULT_DATA, DEFAULT_TIME, true)
 end
@@ -93,6 +82,18 @@ function XMLInfo(xml_path::String)
     return XMLInfo(filename=filename, source_directory=source_directory)
 end
 
+mutable struct BatchSubmission
+    id::String
+    args::SubmissionArguments
+    # modules::Vector{String}
+    instructions::Vector{XMLInfo}
+end
+
+function BatchSubmission(id::String, args::SubmissionArguments, instructions::XMLInfo)
+    return BatchSubmission(id, args, [instructions])
+end
+
+
 
 function preamble(sa::SubmissionArguments)
     args = ["cwd" => "",
@@ -119,7 +120,7 @@ function make_batch(bs::BatchSubmission)
     # for mod in bs.modules
     #     batch *= "module load $mod\n"
     # end
-    for i in instructions
+    for i in bs.instructions
         batch *= "\n\n$(make_instructions(i))"
     end
 
@@ -127,7 +128,7 @@ function make_batch(bs::BatchSubmission)
 end
 
 function save_batch(path::String, bs::BatchSubmission)
-    save(path, make_batch(bs))
+    write(path, make_batch(bs))
 end
 
 
@@ -196,6 +197,14 @@ end
 
 function make_instructions(xi::XMLInfo)
 
+    dest_dir = xi.dest_directory
+    base_dir = xi.base_directory
+
+    if startswith(dest_dir, base_dir)
+        start = length(base_dir) + 2
+        dest_dir = dest_dir[start:end]
+    end
+
     lines = [
             "module load java/1.8.0_111",
             "module load gcc/7.2.0",
@@ -205,32 +214,32 @@ function make_instructions(xi::XMLInfo)
             "export MALLOC_ARENA_MAX=4",
             "export MALLOC_TRIM_THRESHOLD_=-1",
             "",
-            "BEASTDIR=$(xi.beast_dir)"
+            "BEASTDIR=$(xi.beast_dir)",
             "FILENAME=$(xi.filename)",
             "BASEDIR=$(xi.base_directory)",
             "SOURCEDIR=$(xi.source_directory)",
-            "DESTDIR=$(xi.dest_directory)",
+            "DESTDIR=$(dest_dir)",
             "",
             "cd \$TMPDIR",
             ""]
 
-    if save
+    if xi.save
         push!(lines, "SAVEFILE=\$BASEDIR/$(xi.save_path)")
         push!(lines, "SAVEEVERY=$(xi.save_frequency)")
     end
-    if load
+    if xi.load
         push!(lines, "LOADFILE=\$BASEDIR/$(xi.load_path)")
     end
 
 
     beast_line = "java -Xmx1g -jar -Djava.library.path=\$HOME/lib \$BEASTDIR/beast.jar"
-    last_part = "-overwrite \$BASEDIR/\$SOURCEDIR/\$FILENAME.xml > \$HOME/\$FILENAME.txt"
+    last_part = "-overwrite \$SOURCEDIR/\$FILENAME.xml > \$HOME/\$FILENAME.txt"
 
-    if load
+    if xi.load
         load_part = "-load_state \$LOADFILE"
         beast_line = "$beast_line $load_part"
     end
-    if save
+    if xi.save
         save_part = "-save_state \$SAVEFILE -save_every \$SAVEEVERY"
         beast_line = "$beast_line $save_part"
     end
@@ -352,8 +361,8 @@ function setup_sh(path::String, sub::BatchSubmission)
 end
 
 function setup_sh(path::String, dir::String;
-                  sub_args::SubmissionArguments = SubmissionArguments(),
-                  base_dir::String = ENV["HOME"])
+                  sub_args::SubmissionArguments = SubmissionArguments()
+                 )
 
     ids = String[]
     absolute_dir = abspath(dir)
@@ -368,9 +377,7 @@ function setup_sh(path::String, dir::String;
                 r_string = "^$filename(\\d*)\$"
                 match_inds = findall(x -> occursin(r_string, x), ids)
                 id = filename
-                if !isempty()
-                    id = filename
-                else
+                if !isempty(match_inds)
                     max_ind = 0
                     for ind in match_inds
                         m = match(r_string)[1]
