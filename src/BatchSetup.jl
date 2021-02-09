@@ -3,10 +3,12 @@ module BatchSetup
 export setup_batch, setup_sh, BatchInfo, SubmissionArguments
 
 
+
 const SOURCEDIR = "\$HOME/Working-Repo/xml"
 const DEFAULT_DATA = "8G"
 const DEFAULT_TIME = "300:00:00"
 const EMAIL = "gabriel.w.hassler@gmail.com"
+const DEFAULT_BEAST_DIR = "\$HOME/beast-mcmc/build/dist"
 
 mutable struct BatchInfo
     name::String
@@ -34,14 +36,63 @@ mutable struct SubmissionArguments
 end
 
 mutable struct BatchSubmission
+    id::String
     args::SubmissionArguments
-    modules::Vector{String}
-    code::String
+    # modules::Vector{String}
+    instructions::Vector{XMLInfo}
+end
+
+function BatchSubmission(id::String, args::SubmissionArguments, instructions::XMLInfo)
+    return BatchSubmission(id, args, [instructions])
 end
 
 function SubmissionArguments()
     return SubmissionArguments(DEFAULT_DATA, DEFAULT_TIME, true)
 end
+
+mutable struct XMLInfo
+    filename::String
+    base_directory::String
+    source_directory::String
+    dest_directory::String
+    save::Bool
+    save_path::String
+    save_frequency::Int
+    load::Bool
+    load_path::String
+    beast_dir::String
+
+    function XMLInfo(;filename::String="",
+                    base_directory::String=ENV["HOME"],
+                    source_directory::String=base_directory,
+                    dest_directory::String=source_directory,
+                    save::Bool=false,
+                    save_path::String="",
+                    save_frequency::Int=1_000_000,
+                    load::Bool=false,
+                    load_path::String="",
+                    beast_dir=DEFAULT_BEAST_DIR)
+        return new(filename,
+                    base_directory,
+                    source_directory,
+                    dest_directory,
+                    save,
+                    save_path,
+                    save_frequency,
+                    load,
+                    load_path,
+                    beast_dir)
+    end
+end
+
+function XMLInfo(xml_path::String)
+    bn = basename(xml_path)
+    filename = split(bn, '.')[1]
+    src_dir = dirname(xml_path)
+
+    return XMLInfo(filename=filename, source_directory=source_directory)
+end
+
 
 function preamble(sa::SubmissionArguments)
     args = ["cwd" => "",
@@ -54,7 +105,7 @@ function preamble(sa::SubmissionArguments)
         args = [args; email_args]
     end
 
-    hash_bang = "!#/bin/bash"
+    hash_bang = "#!/bin/bash\n"
     lines = ["#\$ -$(p[1]) $(p[2])" for p in args]
 
     return hash_bang * join(lines, "\n")
@@ -65,16 +116,18 @@ function make_batch(bs::BatchSubmission)
     batch = preamble(bs.args)
     batch = batch * "\n\n. /u/local/Modules/default/init/modules.sh\n"
 
-    for mod in bs.modules
-        batch *= "module load $mod\n"
+    # for mod in bs.modules
+    #     batch *= "module load $mod\n"
+    # end
+    for i in instructions
+        batch *= "\n\n$(make_instructions(i))"
     end
-    batch *= "\n\n$(bs.code)"
 
     return batch
 end
 
 function save_batch(path::String, bs::BatchSubmission)
-    save(path, make_batch)
+    save(path, make_batch(bs))
 end
 
 
@@ -139,125 +192,211 @@ function setup_batch(path::String, bi::BatchInfo)
     write(path, all_lines)
 end
 
-function setup_beast_lines(filename::String, save::Bool, save_file::String,
-        save_every::Int,
-        load::Bool, load_dir::String, load_file::String)
-    lines = ["FILENAME=$filename"]
+
+
+function make_instructions(xi::XMLInfo)
+
+    lines = [
+            "module load java/1.8.0_111",
+            "module load gcc/7.2.0",
+            "",
+            "export LD_LIBRARY_PATH=\$HOME/lib:\$LD_LIBRARY_PATH",
+            "export PKG_CONFIG_PATH=\$HOME/lib/pkgconfig:\$PKG_CONFIG_PATH",
+            "export MALLOC_ARENA_MAX=4",
+            "export MALLOC_TRIM_THRESHOLD_=-1",
+            "",
+            "BEASTDIR=$(xi.beast_dir)"
+            "FILENAME=$(xi.filename)",
+            "BASEDIR=$(xi.base_directory)",
+            "SOURCEDIR=$(xi.source_directory)",
+            "DESTDIR=$(xi.dest_directory)",
+            "",
+            "cd \$TMPDIR",
+            ""]
+
     if save
-        push!(lines, "SAVEFILE=$save_file")
-        push!(lines, "SAVEEVERY=$save_every")
+        push!(lines, "SAVEFILE=\$BASEDIR/$(xi.save_path)")
+        push!(lines, "SAVEEVERY=$(xi.save_frequency)")
     end
     if load
-        push!(lines, "LOADFILE=$load_dir/$load_file")
+        push!(lines, "LOADFILE=\$BASEDIR/$(xi.load_path)")
     end
 
 
     beast_line = "java -Xmx1g -jar -Djava.library.path=\$HOME/lib \$BEASTDIR/beast.jar"
-    last_part = "-overwrite \$SOURCEDIR/\$FILENAME.xml > \$HOME/\$FILENAME.txt"
-    save_part = "-save_state \$SAVEFILE -save_every \$SAVEEVERY"
-    load_part = "-load_state \$LOADFILE"
+    last_part = "-overwrite \$BASEDIR/\$SOURCEDIR/\$FILENAME.xml > \$HOME/\$FILENAME.txt"
+
     if load
+        load_part = "-load_state \$LOADFILE"
         beast_line = "$beast_line $load_part"
     end
     if save
+        save_part = "-save_state \$SAVEFILE -save_every \$SAVEEVERY"
         beast_line = "$beast_line $save_part"
     end
     beast_line = "$beast_line $last_part"
     push!(lines, beast_line)
-    return lines
-end
 
-function setup_batch_intro(email::Bool, multicore::Bool, data::String,
-        run_time::String, beast_dir::String, source_dir::String,
-        dest_dir::String, tmp_dir::Bool)
-    lines = ["#\$ -cwd"]
-    if email
-        push!(lines, "#\$ -M gabriel.w.hassler@gmail.com")
-        push!(lines, "#\$ -m bea")
-    end
-    lines = [lines; ["#\$ -o \$HOME/out.joblog",
-                    "#\$ -j y"]]
-    if multicore
-        push!(lines, "#\$ -pe shared 4")
-    end
-    push!(lines, "#\$ -l h_data=$(data),h_rt=$(run_time),highp")
     lines = [lines;
-            ["#!/bin/bash",
-            ". /u/local/Modules/default/init/modules.sh",
-            "module load java/1.8.0_111",
-            "module load gcc/7.2.0",
-            "export LD_LIBRARY_PATH=\$HOME/lib:\$LD_LIBRARY_PATH",
-            "export PKG_CONFIG_PATH=\$HOME/lib/pkgconfig:\$PKG_CONFIG_PATH",
-            "export MALLOC_ARENA_MAX=4",
-            "export MALLOC_TRIM_THRESHOLD_=-1"]
+            ["mkdir -p \$SCRATCH/\$DESTDIR",
+             "cp \$TMPDIR/* \$SCRATCH/\$DESTDIR",
+             "cp \$TMPDIR/* \$BASEDIR/\$DESTDIR"]
             ]
-    push!(lines, "BEASTDIR=$beast_dir")
-    push!(lines, "SOURCEDIR=$source_dir")
-    push!(lines, "DESTDIR=$dest_dir")
-    if tmp_dir
-        push!(lines, "cd \$TMPDIR")
-    else
-        push!(lines, "cd \$DESTDIR")
-    end
-    return lines
+    return join(lines, '\n')
 end
 
 
-function setup_sh(dir::String, bis::Vector{BatchInfo})
-
-    n = length(bis)
-    batch_names = ["$(bis[i].name).txt" for i = 1:n]
-
-    for i = 1:n
-        path = joinpath(dir, batch_names[i])
-        setup_batch(path, bis[i])
-    end
-
-    qsubs = ["qsub $x" for x in batch_names]
-    qsubs = join(qsubs, "\n")
-    write(joinpath(dir, "submit.sh"), qsubs)
-end
-
-function setup_sh(dir::String, filenames::Array{Array{String, N}, M},
-        batch_names::Array{String};
-        multicore::Bool = false,
-        data::String = "4G",
-        run_time::String = "300:00:00",
-        beast_dir::String = "\$HOME/beast-mcmc/build/dist",
-        source_dir::String = SOURCEDIR,
-        dest_dir::String = "\$HOME/Working-Repo/logs",
-        save::Bool = false,
-        save_files::Array{Array{String, N}, M} = [["$x.savestate" for x in y]
-            for y in filenames],
-        save_every::Int = 1000000,
-        load::Bool = false,
-        load_dir::String = dest_dir,
-        load_files::Array{Array{String, N}, M} = [["" for x in y] for y in filenames],
-        email::Bool = true,
-        tmp_dir::Bool = false) where {N, M}
-
-    n = length(filenames)
-
-    for i = 1:n
-        path = joinpath(dir, batch_names[i])
-        setup_batch(path, filenames[i], multicore = multicore, data = data,
-            run_time = run_time, beast_dir = beast_dir, source_dir = source_dir,
-            dest_dir = dest_dir, save = save,
-            save_files = save_files[i],
-            save_every = save_every, load = load, load_dir = load_dir,
-            load_files = load_files[i], email = email, tmp_dir = tmp_dir)
-    end
-
-    qsubs = ["qsub $x" for x in batch_names]
-    qsubs = join(qsubs, "\n")
-    write(joinpath(dir, "submit.sh"), qsubs)
-end
-
-# function submit_batch(path::String, bi::BatchInfo)
-#     setup_batch(path, bi)
-#     run(`qsub $path`)
+# function setup_batch_intro(email::Bool, multicore::Bool, data::String,
+#         run_time::String, beast_dir::String, source_dir::String,
+#         dest_dir::String, tmp_dir::Bool)
+#     lines = ["#\$ -cwd"]
+#     if email
+#         push!(lines, "#\$ -M gabriel.w.hassler@gmail.com")
+#         push!(lines, "#\$ -m bea")
+#     end
+#     lines = [lines; ["#\$ -o \$HOME/out.joblog",
+#                     "#\$ -j y"]]
+#     if multicore
+#         push!(lines, "#\$ -pe shared 4")
+#     end
+#     push!(lines, "#\$ -l h_data=$(data),h_rt=$(run_time),highp")
+#     lines = [lines;
+#             ["#!/bin/bash",
+#             ". /u/local/Modules/default/init/modules.sh",
+#             "module load java/1.8.0_111",
+#             "module load gcc/7.2.0",
+#             "export LD_LIBRARY_PATH=\$HOME/lib:\$LD_LIBRARY_PATH",
+#             "export PKG_CONFIG_PATH=\$HOME/lib/pkgconfig:\$PKG_CONFIG_PATH",
+#             "export MALLOC_ARENA_MAX=4",
+#             "export MALLOC_TRIM_THRESHOLD_=-1"]
+#             ]
+#     push!(lines, "BEASTDIR=$beast_dir")
+#     # push!(lines, "SOURCEDIR=$source_dir")
+#     # push!(lines, "DESTDIR=$dest_dir")
+#     if tmp_dir
+#         push!(lines, "cd \$TMPDIR")
+#     else
+#         # push!(lines, "cd \$DESTDIR")
+#     end
+#     return lines
 # end
 
+
+# function setup_sh(dir::String, bis::Vector{BatchInfo})
+
+#     n = length(bis)
+#     batch_names = ["$(bis[i].name).txt" for i = 1:n]
+
+#     for i = 1:n
+#         path = joinpath(dir, batch_names[i])
+#         setup_batch(path, bis[i])
+#     end
+
+#     qsubs = ["qsub $x" for x in batch_names]
+#     qsubs = join(qsubs, "\n")
+#     write(joinpath(dir, "submit.sh"), qsubs)
+# end
+
+# function setup_sh(dir::String, filenames::Array{Array{String, N}, M},
+#         batch_names::Array{String};
+#         multicore::Bool = false,
+#         data::String = "4G",
+#         run_time::String = "300:00:00",
+#         beast_dir::String = "\$HOME/beast-mcmc/build/dist",
+#         source_dir::String = SOURCEDIR,
+#         dest_dir::String = "\$HOME/Working-Repo/logs",
+#         save::Bool = false,
+#         save_files::Array{Array{String, N}, M} = [["$x.savestate" for x in y]
+#             for y in filenames],
+#         save_every::Int = 1000000,
+#         load::Bool = false,
+#         load_dir::String = dest_dir,
+#         load_files::Array{Array{String, N}, M} = [["" for x in y] for y in filenames],
+#         email::Bool = true,
+#         tmp_dir::Bool = false) where {N, M}
+
+#     n = length(filenames)
+
+#     for i = 1:n
+#         path = joinpath(dir, batch_names[i])
+#         setup_batch(path, filenames[i], multicore = multicore, data = data,
+#             run_time = run_time, beast_dir = beast_dir, source_dir = source_dir,
+#             dest_dir = dest_dir, save = save,
+#             save_files = save_files[i],
+#             save_every = save_every, load = load, load_dir = load_dir,
+#             load_files = load_files[i], email = email, tmp_dir = tmp_dir)
+#     end
+
+#     qsubs = ["qsub $x" for x in batch_names]
+#     qsubs = join(qsubs, "\n")
+#     write(joinpath(dir, "submit.sh"), qsubs)
+# end
+
+function setup_sh(path::String, subs::Array{BatchSubmission})
+    n = length(subs)
+    lines = fill("", n)
+    dir = dirname(path)
+    for i = 1:n
+        sub = subs[i]
+        batch_path = joinpath(dir, sub.id * ".job")
+        save_batch(batch_path, sub)
+        lines[i] = "qsub $(batch_path)"
+    end
+
+    write(path, join(lines, '\n'))
+    return path
+end
+
+function setup_sh(path::String, sub::BatchSubmission)
+    return setup_sh(path, [sub])
+end
+
+function setup_sh(path::String, dir::String;
+                  sub_args::SubmissionArguments = SubmissionArguments(),
+                  base_dir::String = ENV["HOME"])
+
+    ids = String[]
+    absolute_dir = abspath(dir)
+    submissions = BatchSubmission[]
+
+    for d in walkdir(absolute_dir)
+        files = d[3]
+        file_dir = d[1]
+        for file in files
+            if endswith(file, ".xml")
+                filename = file[1:(end - 4)]
+                r_string = "^$filename(\\d*)\$"
+                match_inds = findall(x -> occursin(r_string, x), ids)
+                id = filename
+                if !isempty()
+                    id = filename
+                else
+                    max_ind = 0
+                    for ind in match_inds
+                        m = match(r_string)[1]
+                        current_ind = 0
+                        if m != ""
+                            current_ind = parse(Int, m)
+                        end
+
+                        if current_ind > max_ind
+                            max_ind = current_ind
+                        end
+                    end
+
+                    max_ind += 1
+                    id = filename * string(max_ind)
+                end
+                push!(ids, id)
+                xi = XMLInfo(filename=filename, source_directory=file_dir)
+                bs = BatchSubmission(id, sub_args, xi)
+                push!(submissions, bs)
+            end
+        end
+    end
+
+    setup_sh(path, submissions)
+end
 
 
 end
