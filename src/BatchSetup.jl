@@ -120,6 +120,8 @@ function make_batch(bs::BatchSubmission)
     # for mod in bs.modules
     #     batch *= "module load $mod\n"
     # end
+    batch *= join([make_instructions(xi) for xi in bs.instructions],
+                    "\nrm \$TMPDIR/*\n\n")
     for i in bs.instructions
         batch *= "\n\n$(make_instructions(i))"
     end
@@ -132,66 +134,66 @@ function save_batch(path::String, bs::BatchSubmission)
 end
 
 
-function BatchInfo(filenames::Vector{String})
-    return BatchInfo(filenames[1],
-                    filenames,
-                    false,
-                    "8G",
-                    "300:00:00",
-                    "\$HOME/beast-mcmc/build/dist",
-                    ".",
-                    false,
-                    ["$file.savestate" for file in filenames],
-                    1_000_000,
-                    false,
-                    ".",
-                    [""],
-                    true,
-                    false,
-                    ".")
-end
+# function BatchInfo(filenames::Vector{String})
+#     return BatchInfo(filenames[1],
+#                     filenames,
+#                     false,
+#                     "8G",
+#                     "300:00:00",
+#                     "\$HOME/beast-mcmc/build/dist",
+#                     ".",
+#                     false,
+#                     ["$file.savestate" for file in filenames],
+#                     1_000_000,
+#                     false,
+#                     ".",
+#                     [""],
+#                     true,
+#                     false,
+#                     ".")
+# end
 
-function BatchInfo(filename::String)
-    return BatchInfo([filename])
-end
-
-
-function setup_batch(path::String, bi::BatchInfo)
-
-    filenames = bi.filenames
-    multicore = bi.multicore
-    data = bi.data
-    run_time = bi.run_time
-    beast_dir = bi.beast_dir
-    source_dir = bi.source_dir
-    dest_dir = bi.dest_dir
-    save = bi.save
-    save_files = bi.save_files
-    save_every = bi.save_every
-    load = bi.load
-    load_dir = bi.load_dir
-    load_files = bi.load_files
-    email = bi.email
-    tmp_dir = bi.tmp_dir
-
-    lines = setup_batch_intro(email, multicore, data, run_time, beast_dir,
-        source_dir, dest_dir, tmp_dir)
+# function BatchInfo(filename::String)
+#     return BatchInfo([filename])
+# end
 
 
-    for i = 1:length(filenames)
-        beast_lines = setup_beast_lines(filenames[i], save, save_files[i],
-            save_every, load, load_dir, load_files[i])
+# function setup_batch(path::String, bi::BatchInfo)
 
-        lines = [lines; beast_lines]
-    end
-    if tmp_dir
-        push!(lines, "cp \$TMPDIR/* \$SCRATCH/.")
-        push!(lines, "cp \$TMPDIR/* \$DESTDIR/.")
-    end
+#     filenames = bi.filenames
+#     multicore = bi.multicore
+#     data = bi.data
+#     run_time = bi.run_time
+#     beast_dir = bi.beast_dir
+#     source_dir = bi.source_dir
+#     dest_dir = bi.dest_dir
+#     save = bi.save
+#     save_files = bi.save_files
+#     save_every = bi.save_every
+#     load = bi.load
+#     load_dir = bi.load_dir
+#     load_files = bi.load_files
+#     email = bi.email
+#     tmp_dir = bi.tmp_dir
 
-    all_lines = join(lines, "\n")
-    write(path, all_lines)
-end
+#     lines = setup_batch_intro(email, multicore, data, run_time, beast_dir,
+#         source_dir, dest_dir, tmp_dir)
+
+
+#     for i = 1:length(filenames)
+#         beast_lines = setup_beast_lines(filenames[i], save, save_files[i],
+#             save_every, load, load_dir, load_files[i])
+
+#         lines = [lines; beast_lines]
+#     end
+#     if tmp_dir
+#         push!(lines, "cp \$TMPDIR/* \$SCRATCH/.")
+#         push!(lines, "cp \$TMPDIR/* \$DESTDIR/.")
+#     end
+
+#     all_lines = join(lines, "\n")
+#     write(path, all_lines)
+# end
 
 
 
@@ -345,6 +347,10 @@ function setup_sh(path::String, subs::Array{BatchSubmission})
     n = length(subs)
     lines = fill("", n)
     dir = dirname(path)
+    ids = [s.id for s in subs]
+    if length(unique(ids)) != length(ids)
+        error("All batch ids must be unique.")
+    end
     for i = 1:n
         sub = subs[i]
         batch_path = joinpath(dir, sub.id * ".job")
@@ -360,11 +366,13 @@ function setup_sh(path::String, sub::BatchSubmission)
     return setup_sh(path, [sub])
 end
 
-function setup_sh(path::String, dir::String;
-                  sub_args::SubmissionArguments = SubmissionArguments()
-                 )
+function get_submissions(path::String, dir::String;
+                         sub_args::SubmissionArguments = SubmissionArguments(),
+                         combined::Bool = false
+                        )
 
     ids = String[]
+    xmls = XMLInfo[]
     absolute_dir = abspath(dir)
     submissions = BatchSubmission[]
 
@@ -396,13 +404,62 @@ function setup_sh(path::String, dir::String;
                 end
                 push!(ids, id)
                 xi = XMLInfo(filename=filename, source_directory=file_dir)
-                bs = BatchSubmission(id, sub_args, xi)
-                push!(submissions, bs)
+                push!(xmls, xi)
+                # bs = BatchSubmission(id, sub_args, xi)
+                # push!(submissions, bs)
             end
         end
     end
 
-    setup_sh(path, submissions)
+    if combined
+        submissions = [BatchSubmission(ids[1] * "_combined", sub_args, xmls)]
+    else
+        submissions = [BatchSubmission(ids[i], sub_args, xmls[i]) for i = 1:lenght(xis)]
+    end
+
+    return submissions
+end
+
+function setup_sh(path::String, dir::String;
+                  sub_args::SubmissionArguments = SubmissionArguments(),
+                  combined::Bool = false)
+    submissions = get_submissions(path, dir,
+                                  sub_args = sub_args, combined = combined)
+    return setup_sh(path, submissions)
+end
+
+function setup_sh_depth(path::String, dir::String, depth::Int;
+                        sub_args::SubmissionArguments = SubmissionArguments(),
+                        all_submissions = BatchSubmission[],
+                        original_depth = depth)
+    if depth == 0
+        sub = get_submissions(path, dir, sub_args = sub_args, combined = true)[1] # there should only be one
+        sub.id = splitpath(dir)[end]
+        push!(all_submissions, sub)
+    else
+        for sub_dir in readdir(dir, join=true)
+            if isdir(sub_dir)
+                setup_sh_depth(path, sub_dir, depth - 1,
+                               sub_args = sub_args,
+                               all_submissions = all_submissions,
+                               original_depth = original_depth)
+            end
+        end
+    end
+
+    if depth == original_depth
+        ids = [s.id for s in all_submissions]
+        if length(unique(ids)) != length(ids)
+            for i = 1:length(all_submissions)
+                id = all_submissions[i].id
+                all_submissions[i].id = id * "_$i"
+            end
+        end
+
+        return setup_sh(path, all_submissions)
+    end
+
+    return nothing
 end
 
 
