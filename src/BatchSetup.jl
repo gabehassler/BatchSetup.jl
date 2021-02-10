@@ -10,24 +10,6 @@ const DEFAULT_TIME = "300:00:00"
 const EMAIL = "gabriel.w.hassler@gmail.com"
 const DEFAULT_BEAST_DIR = "\$HOME/beast-mcmc/build/dist"
 
-mutable struct BatchInfo
-    name::String
-    filenames::Vector{String}
-    multicore::Bool
-    data::String
-    run_time::String
-    beast_dir::String
-    dest_dir::String
-    save::Bool
-    save_files::Vector{String}
-    save_every::Int
-    load::Bool
-    load_dir::String
-    load_files::Vector{String}
-    email::Bool
-    tmp_dir::Bool
-    source_dir::String
-end
 
 mutable struct SubmissionArguments
     h_data::String
