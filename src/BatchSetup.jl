@@ -1,6 +1,6 @@
 module BatchSetup
 
-export setup_batch, setup_sh, BatchInfo, SubmissionArguments
+export setup_batch, setup_sh, SubmissionArguments, setup_sh_depth
 
 
 
