@@ -197,49 +197,65 @@ function setup_sh(path::String, sub::BatchSubmission)
     return setup_sh(path, [sub])
 end
 
+function get_submission(file::String, file_dir::String; ids::Vector{String} = String[])
+    filename = file[1:(end - 4)]
+    r_string = "^$filename(\\d*)\$"
+    match_inds = findall(x -> occursin(r_string, x), ids)
+    id = filename
+    if !isempty(match_inds)
+        max_ind = 0
+        for ind in match_inds
+            m = match(r_string)[1]
+            current_ind = 0
+            if m != ""
+                current_ind = parse(Int, m)
+            end
+
+            if current_ind > max_ind
+                max_ind = current_ind
+            end
+        end
+
+        max_ind += 1
+        id = filename * string(max_ind)
+    end
+    xi = XMLInfo(filename=filename, source_directory=file_dir)
+    return xi
+end
+
+function get_dir_submissions(dir::String; ids::Vector{String} = String[])
+    xis = XMLInfo[]
+    for file in readdir(dir, join=false)
+        if endswith(file, ".xml")
+            xi = get_submission(file, dir, ids=ids)
+            push!(xis, xi)
+            push!(ids, xi.id)
+        end
+    end
+    return xis
+end
+
+
+
+
 function get_submissions(path::String, dir::String;
                          sub_args::SubmissionArguments = SubmissionArguments(),
-                         combined::Bool = false
+                         combined::Bool = false,
+                         sub_directories::Bool = true
                         )
 
     ids = String[]
     xmls = XMLInfo[]
     absolute_dir = abspath(dir)
     submissions = BatchSubmission[]
-
-    for d in walkdir(absolute_dir)
-        files = d[3]
-        file_dir = d[1]
-        for file in files
-            if endswith(file, ".xml")
-                filename = file[1:(end - 4)]
-                r_string = "^$filename(\\d*)\$"
-                match_inds = findall(x -> occursin(r_string, x), ids)
-                id = filename
-                if !isempty(match_inds)
-                    max_ind = 0
-                    for ind in match_inds
-                        m = match(r_string)[1]
-                        current_ind = 0
-                        if m != ""
-                            current_ind = parse(Int, m)
-                        end
-
-                        if current_ind > max_ind
-                            max_ind = current_ind
-                        end
-                    end
-
-                    max_ind += 1
-                    id = filename * string(max_ind)
-                end
-                push!(ids, id)
-                xi = XMLInfo(filename=filename, source_directory=file_dir)
-                push!(xmls, xi)
-                # bs = BatchSubmission(id, sub_args, xi)
-                # push!(submissions, bs)
+    if sub_directories
+        for d in walkdir(absolute_dir)
+            file_dir = d[1]
+            xmls = [xmls; get_dir_submissions(file_dir, ids=ids)]
             end
         end
+    else
+        xmls = get_dir_submissions(dir, ids = ids)
     end
 
     if combined
@@ -261,10 +277,12 @@ end
 
 function setup_sh_depth(path::String, dir::String, depth::Int;
                         sub_args::SubmissionArguments = SubmissionArguments(),
-                        all_submissions = BatchSubmission[],
-                        original_depth = depth)
+                        all_submissions::Vector{BatchSubmission} = BatchSubmission[],
+                        original_depth::Int = depth,
+                        exact_depth::Bool = false)
     if depth == 0
-        sub = get_submissions(path, dir, sub_args = sub_args, combined = true)[1] # there should only be one
+        sub = get_submissions(path, dir, sub_args = sub_args, combined = true,
+                              sub_directories = !exact_depth)[1] # there should only be one
         sub.id = splitpath(dir)[end]
         push!(all_submissions, sub)
     else
