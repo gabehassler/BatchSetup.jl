@@ -178,10 +178,8 @@ function setup_sh(path::String, subs::Array{BatchSubmission})
     n = length(subs)
     lines = fill("", n)
     dir = dirname(path)
+    check_ids!(subs)
     ids = [s.id for s in subs]
-    if length(unique(ids)) != length(ids)
-        error("All batch ids must be unique.")
-    end
     for i = 1:n
         sub = subs[i]
         batch_path = joinpath(dir, sub.id * ".job")
@@ -197,39 +195,19 @@ function setup_sh(path::String, sub::BatchSubmission)
     return setup_sh(path, [sub])
 end
 
-function get_submission(file::String, file_dir::String; ids::Vector{String} = String[])
+function get_submission(file::String, file_dir::String)
     filename = file[1:(end - 4)]
-    r_string = "^$filename(\\d*)\$"
-    match_inds = findall(x -> occursin(r_string, x), ids)
-    id = filename
-    if !isempty(match_inds)
-        max_ind = 0
-        for ind in match_inds
-            m = match(r_string)[1]
-            current_ind = 0
-            if m != ""
-                current_ind = parse(Int, m)
-            end
 
-            if current_ind > max_ind
-                max_ind = current_ind
-            end
-        end
-
-        max_ind += 1
-        id = filename * string(max_ind)
-    end
     xi = XMLInfo(filename=filename, source_directory=file_dir)
     return xi
 end
 
-function get_dir_submissions(dir::String; ids::Vector{String} = String[])
+function get_dir_submissions(dir::String)
     xis = XMLInfo[]
     for file in readdir(dir, join=false)
         if endswith(file, ".xml")
-            xi = get_submission(file, dir, ids=ids)
+            xi = get_submission(file, dir)
             push!(xis, xi)
-            push!(ids, xi.id)
         end
     end
     return xis
@@ -244,24 +222,22 @@ function get_submissions(path::String, dir::String;
                          sub_directories::Bool = true
                         )
 
-    ids = String[]
     xmls = XMLInfo[]
     absolute_dir = abspath(dir)
     submissions = BatchSubmission[]
     if sub_directories
         for d in walkdir(absolute_dir)
             file_dir = d[1]
-            xmls = [xmls; get_dir_submissions(file_dir, ids=ids)]
-            end
+            xmls = [xmls; get_dir_submissions(file_dir)]
         end
     else
-        xmls = get_dir_submissions(dir, ids = ids)
+        xmls = get_dir_submissions(dir)
     end
 
     if combined
         submissions = [BatchSubmission(ids[1] * "_combined", sub_args, xmls)]
     else
-        submissions = [BatchSubmission(ids[i], sub_args, xmls[i]) for i = 1:lenght(xis)]
+        submissions = [BatchSubmission(xmls[i].filename, sub_args, xmls[i]) for i = 1:length(xmls)]
     end
 
     return submissions
@@ -274,6 +250,42 @@ function setup_sh(path::String, dir::String;
                                   sub_args = sub_args, combined = combined)
     return setup_sh(path, submissions)
 end
+
+function check_ids!(subs::Array{BatchSubmission})
+    n = length(subs)
+    ids = [s.id for s in subs]
+
+    for i = 1:n
+        old_id = ids[i]
+        r_string = Regex("^$old_id(\\d*)\$")
+        match_inds = findall(x -> occursin(r_string, x), @view ids[1:(i - 1)])
+        id = old_id
+        if !isempty(match_inds)
+            max_ind = 0
+            for ind in match_inds
+                m = match(r_string, ids[ind])[1]
+                current_ind = 0
+                if m != ""
+                    current_ind = parse(Int, m)
+                end
+
+                if current_ind > max_ind
+                    max_ind = current_ind
+                end
+            end
+
+            max_ind += 1
+            id = old_id * string(max_ind)
+        end
+
+        ids[i] = id
+        subs[i].id = id
+    end
+
+
+    return nothing
+end
+
 
 function setup_sh_depth(path::String, dir::String, depth::Int;
                         sub_args::SubmissionArguments = SubmissionArguments(),
@@ -297,19 +309,40 @@ function setup_sh_depth(path::String, dir::String, depth::Int;
     end
 
     if depth == original_depth
-        ids = [s.id for s in all_submissions]
-        if length(unique(ids)) != length(ids)
-            for i = 1:length(all_submissions)
-                id = all_submissions[i].id
-                all_submissions[i].id = id * "_$i"
-            end
-        end
-
         return setup_sh(path, all_submissions)
     end
 
     return nothing
 end
+
+function copy_to_depth(dir::String, depth::Int;
+                       new_dir::String = "$(dir)_new",
+                       extensions::Vector{String} = ["xml"])
+    original_depth = length(splitpath(dir))
+    for d in walkdir(dir)
+        split_dir = splitpath(d[1])
+        new_depth = length(split_dir)
+        if new_depth - original_depth == depth
+            local_dir = joinpath(split_dir[original_depth + 1:end]...)
+            for file in d[3]
+                for ext in extensions
+                    if endswith(file, ext)
+                        dest_dir = joinpath(new_dir, local_dir)
+                        mkpath(dest_dir)
+                        cp(joinpath(d[1], file), joinpath(dest_dir, file))
+                        break
+                    end
+                end
+            end
+        end
+    end
+    return nothing
+end
+
+
+
+
+
 
 
 end
