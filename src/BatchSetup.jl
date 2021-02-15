@@ -258,7 +258,7 @@ function check_ids!(subs::Array{BatchSubmission})
     for i = 1:n
         old_id = ids[i]
         r_string = Regex("^$old_id(\\d*)\$")
-        match_inds = findall(x -> occursin(r_string, x), @view ids[1:(i - 1)])
+        match_inds = findall(x -> occursin(r_string, x), ids[1:(i - 1)])
         id = old_id
         if !isempty(match_inds)
             max_ind = 0
