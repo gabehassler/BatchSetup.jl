@@ -237,7 +237,12 @@ function get_submissions(path::String, dir::String;
     if combined
         submissions = [BatchSubmission(ids[1] * "_combined", sub_args, xmls)]
     else
-        submissions = [BatchSubmission(xmls[i].filename, sub_args, xmls[i]) for i = 1:length(xmls)]
+        submissions = Vector{BatchSubmission}(undef, length(xmls))
+        for i = 1:length(submissions)
+            id = xmls[i].filename
+            xml = xmls[i]
+            submissions[i] = BatchSubmission(id, sub_args, xml)
+        end
     end
 
     return submissions
