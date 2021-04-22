@@ -119,7 +119,7 @@ function make_batch(bs::BatchSubmission)
     args = bs.args
     batch = preamble(args)
 
-    batch = "\n\n"
+    batch *= "\n\n"
     if args.gpu
         batch *= "export GPU_DEVICE_ORDINAL=\$SGE_HGR_vega"
 
