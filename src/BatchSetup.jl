@@ -15,6 +15,7 @@ mutable struct SubmissionArguments
     h_data::String
     h_rt::String
     email::Bool
+    gpu::Bool
 end
 
 function SubmissionArguments()
@@ -32,6 +33,7 @@ mutable struct XMLInfo
     load::Bool
     load_path::String
     beast_dir::String
+    gpu::Bool
 
     function XMLInfo(;filename::String="",
                     base_directory::String=ENV["HOME"],
@@ -42,7 +44,8 @@ mutable struct XMLInfo
                     save_frequency::Int=1_000_000,
                     load::Bool=false,
                     load_path::String="",
-                    beast_dir=DEFAULT_BEAST_DIR)
+                    beast_dir=DEFAULT_BEAST_DIR,
+                    gpu::Bool = false)
         return new(filename,
                     base_directory,
                     source_directory,
@@ -52,7 +55,8 @@ mutable struct XMLInfo
                     save_frequency,
                     load,
                     load_path,
-                    beast_dir)
+                    beast_dir,
+                    gpu)
     end
 end
 
@@ -78,10 +82,25 @@ end
 
 
 function preamble(sa::SubmissionArguments)
+
+    l_args = ["h_rt=$(sa.h_rt)",
+              "h_data=$(sa.h_data)",
+              "highp"
+             ]
+
+    if sa.gpu
+        gpu_l_args = ["VEGA20",
+                      "gpu",
+                      "rh7",
+                      "vega=1"
+                     ]
+
+        l_args = [l_args; gpu_l_args]
+
     args = ["cwd" => "",
             "o" => "joblog.out",
             "j" => "y",
-            "l" => "h_rt=$(sa.h_rt),h_data=$(sa.h_data),highp"]
+            "l" => join(l_args, ',')]
 
     if sa.email
         email_args = ["M" => EMAIL, "m" => "bea"]
@@ -96,7 +115,14 @@ end
 
 function make_batch(bs::BatchSubmission)
 
-    batch = preamble(bs.args)
+    args = bs.args
+    batch = preamble(args)
+
+    batch = "\n\n"
+    if args.gpu
+        batch *= "export GPU_DEVICE_ORDINAL=\$SGE_HGR_vega"
+
+    end
     batch = batch * "\n\n. /u/local/Modules/default/init/modules.sh\n"
 
     # for mod in bs.modules
@@ -104,9 +130,9 @@ function make_batch(bs::BatchSubmission)
     # end
     batch *= join([make_instructions(xi) for xi in bs.instructions],
                     "\nrm \$TMPDIR/*\n\n")
-    for i in bs.instructions
-        batch *= "\n\n$(make_instructions(i))"
-    end
+    # for i in bs.instructions
+    #     batch *= "\n\n$(make_instructions(i))"
+    # end
 
     return batch
 end
@@ -125,14 +151,15 @@ function make_instructions(xi::XMLInfo)
         dest_dir = dest_dir[start:end]
     end
 
+
     lines = [
             "module load java/1.8.0_111",
-            "module load gcc/7.2.0",
+            "module load gcc/10.2.0",
             "",
-            "export LD_LIBRARY_PATH=\$HOME/lib:\$LD_LIBRARY_PATH",
-            "export PKG_CONFIG_PATH=\$HOME/lib/pkgconfig:\$PKG_CONFIG_PATH",
-            "export MALLOC_ARENA_MAX=4",
-            "export MALLOC_TRIM_THRESHOLD_=-1",
+            "export LD_LIBRARY_PATH=\$LD_LIBRARY_PATH:~/usr/local/lib",
+            # "export PKG_CONFIG_PATH=\$HOME/lib/pkgconfig:\$PKG_CONFIG_PATH",
+            # "export MALLOC_ARENA_MAX=4",
+            # "export MALLOC_TRIM_THRESHOLD_=-1",
             "",
             "BEASTDIR=$(xi.beast_dir)",
             "FILENAME=$(xi.filename)",
@@ -143,6 +170,11 @@ function make_instructions(xi::XMLInfo)
             "cd \$TMPDIR",
             ""]
 
+    if xi.gpu
+        gpu_lines = ["export GPU_DEVICE_ORDINAL=\$SGE_HGR_vega",
+                     "module load amd/rocm"]
+    end
+
     if xi.save
         push!(lines, "SAVEFILE=\$BASEDIR/$(xi.save_path)")
         push!(lines, "SAVEEVERY=$(xi.save_frequency)")
@@ -152,7 +184,7 @@ function make_instructions(xi::XMLInfo)
     end
 
 
-    beast_line = "java -Xmx1g -jar -Djava.library.path=\$HOME/lib \$BEASTDIR/beast.jar"
+    beast_line = "java -Xmx2G -jar -Djava.library.path=/u/home/g/ghassler/usr/local/lib \$BEASTDIR/beast.jar"
     last_part = "-overwrite \$SOURCEDIR/\$FILENAME.xml > \$HOME/\$FILENAME.txt"
 
     if xi.load
@@ -162,6 +194,9 @@ function make_instructions(xi::XMLInfo)
     if xi.save
         save_part = "-save_state \$SAVEFILE -save_every \$SAVEEVERY"
         beast_line = "$beast_line $save_part"
+    end
+    if xi.gpu
+        beast_line = beast_line * " -beagle_order 1"
     end
     beast_line = "$beast_line $last_part"
     push!(lines, beast_line)
@@ -343,11 +378,6 @@ function copy_to_depth(dir::String, depth::Int;
     end
     return nothing
 end
-
-
-
-
-
 
 
 end
