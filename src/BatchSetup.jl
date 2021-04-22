@@ -125,6 +125,12 @@ function make_batch(bs::BatchSubmission)
     end
     batch = batch * "\n\n. /u/local/Modules/default/init/modules.sh\n"
 
+    if args.gpu
+        for xi in bs.instructions
+            xi.gpu = args.gpu
+        end
+    end
+
     # for mod in bs.modules
     #     batch *= "module load $mod\n"
     # end
