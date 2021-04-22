@@ -19,7 +19,7 @@ mutable struct SubmissionArguments
 end
 
 function SubmissionArguments()
-    return SubmissionArguments(DEFAULT_DATA, DEFAULT_TIME, true)
+    return SubmissionArguments(DEFAULT_DATA, DEFAULT_TIME, true, false)
 end
 
 mutable struct XMLInfo
@@ -96,6 +96,7 @@ function preamble(sa::SubmissionArguments)
                      ]
 
         l_args = [l_args; gpu_l_args]
+    end
 
     args = ["cwd" => "",
             "o" => "joblog.out",
